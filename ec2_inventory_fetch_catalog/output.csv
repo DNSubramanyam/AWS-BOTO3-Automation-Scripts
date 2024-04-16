@@ -1,0 +1,4 @@
+Name,InstanceID,PrivateIp,AttachedVolumeIds
+my-server,i-0bb29bf4495eea3f0,172.31.40.76,vol-07e965c4ec9140706
+Web-Server-01-18-Oct-2023,i-0d8f154f62314edfd,172.31.45.255,"vol-06160c025fb8bac6b,vol-09291c596ba23f380"
+test-server,i-0e609668147f62b41,172.31.44.67,vol-0892341c5d0dcf7f0

@@ -1,0 +1,114 @@
+description: Snapshot backup of root volumes
+schemaVersion: '0.3'
+assumeRole: "{{ AutomationAssumeRole }}"
+parameters:
+  SelectInstances:
+    type: String
+    description: (Optional) The ARN of the role that allows Automation to perform the actions on your behalf.
+    allowedValues:
+      - primary
+      - secondary
+      - jumpservers
+  AutomationAssumeRole:
+    type: String
+    description: "(Optional) The ARN of the role that allows Automation to perform
+      the actions on your behalf."
+    default: 'arn:aws:iam::366951018568:role/Custom_root_volume_backup_automation_role'
+  SnsTopicARN:
+    type: String
+    description: "SNS topic ARN"
+    default: 'arn:aws:sns:ap-south-1:366951018568:sample-testing-topic'
+mainSteps:
+- name: fetchInstances
+  action: 'aws:executeAwsApi'
+  inputs:
+    Service: ec2
+    Api: DescribeInstances
+    Filters:
+      - Name: 'tag:Rep'
+        Values:
+          - '{{ SelectInstances }}'
+  outputs:
+    - Name: InstanceId
+      Selector: $.Reservations..Instances..InstanceId
+      Type: StringList
+- name: initiateBackup
+  action: aws:executeScript
+  inputs:
+    Runtime: "python3.8"
+    Handler: initiateBackup
+    InputPayload:
+      instanceId: '{{fetchInstances.InstanceId}}'
+      selection: '{{ SelectInstances }}'
+    Script: |-
+        def initiateBackup(events, context):
+            import boto3
+            from datetime import datetime
+
+            con = boto3.session.Session()
+            ec2 = con.client('ec2', region_name='ap-south-1')
+
+            patch_tag = [{'Key': 'BAU', 'Value': 'Patching'}]
+            current_datetime = datetime.now().strftime("%y-%m-%d_%H-%M-%S")
+            snapshot_id = []
+            row = []
+            ins_name = []
+
+            ins_list = events['instanceId']
+            if len(ins_list) > 0:
+                try:
+                    ec2_response = ec2.describe_instances(InstanceIds=ins_list)
+                    for each in ec2_response['Reservations']:
+                        for ins in each ['Instances']:
+                            instance_id = ins['InstanceId']
+                            root_device = ins['RootDeviceName']
+                            for tag in ins['Tags']:
+                                if tag['Key'] == 'Name':
+                                    ins_name.append(tag['Value'])
+                            vol_response = ec2.describe_volumes(Filters=[{'Name': 'attachment.instance-id', 'Values': [instance_id]}, {'Name': 'attachment.device', 'Values': [root_device]}])
+                            for vol in vol_response['Volumes']:
+                                volume_id = vol['VolumeId']
+                                volume_tags = vol['Tags']
+                                volume_tags.extend(patch_tag)
+                                TagSpecs=[{'ResourceType': 'snapshot', 'Tags': volume_tags}]
+                                for tag in volume_tags:
+                                    if tag['Key'] == 'Name':
+                                        description = tag['Value'] + '_for_patching_' + current_datetime
+                                snap_response = ec2.create_snapshot(Description = description, VolumeId = volume_id, TagSpecifications=TagSpecs)
+                                snapshot_id.append(snap_response['SnapshotId'])
+                    if len(snapshot_id) > 0:
+                        for ind in range(0, len(ins_list)):
+                            row.append((ins_list[ind]).ljust(20, ' ') + '[' + ins_name[ind] + ']' + '\t==>\t' + snapshot_id[ind])
+                        data1 = '\n'.join(row) 
+                        message = f'\nExecution is successful for {events["selection"]} servers..!\n\nServers actioned [Total = {len(ins_list)}] :\n\n{data1}'
+                except Exception as e:
+                    message = f'\nExecution failed for {events["selection"]} servers..!\n\nServers actioned [Total = {len(ins_list)}]\n\nError: {e}'
+            return{
+                'SnapshotId': snapshot_id,
+                'Message' : message
+            }
+
+  outputs:
+    - Name: snapshotId
+      Selector: $.Payload.SnapshotId
+      Type: StringList
+    - Name:  message
+      Selector: $.Payload.Message
+      Type: String
+- name: snapshotStatusCheck
+  action: aws:waitForAwsResourceProperty
+  inputs:
+    Service: ec2
+    Api: DescribeSnapshots
+    SnapshotIds: "{{ initiateBackup.snapshotId }}"
+    PropertySelector: Snapshots[0].State
+    DesiredValues:
+    - completed
+- name: PublishSNSNotification
+  action: aws:executeAwsApi
+  inputs:
+    Service: sns
+    Api: Publish
+    TopicArn: "{{SnsTopicARN}}"
+    Subject: "IDPS server pathching || Root-volume-backup"
+    Message: "{{initiateBackup.message}}"
