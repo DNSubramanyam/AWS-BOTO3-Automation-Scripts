@@ -1,0 +1,3 @@
+Name,InstanceId,IP,OS Type,Last AMI Rotation Date,Age,Environment,ApplicationName,Owner,Hostname
+test,i-064516addcbac93ed,172.31.74.49,Linux/UNIX,24-03-2025,0,Dev,ser,Subbu,Null
+test2,i-09f4077f66fb3cc8c,172.31.19.212,Linux/UNIX,24-03-2025,0,Null,fur,Bindu,hgtf12
